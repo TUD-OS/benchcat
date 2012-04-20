@@ -28,17 +28,19 @@
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/sendfile.h>
 #include <netinet/in.h>
 #include <fcntl.h>
 #include <time.h>
 #include <pthread.h>
 
+#define MAX_CHUNK (4*1024*1024)
+
 static uint64_t bytes_per_second;
 static uint16_t external_port;
+static int      devzero;
 
 static pthread_mutex_t budget_mtx;
-
-static uint8_t buffer[1024*1024];
 
 static void
 print_help(void)
@@ -69,8 +71,8 @@ static uint32_t get_budget()
 
   pthread_mutex_unlock(&budget_mtx);
 
-  if (budget > 10000000)
-    budget = 10000000;
+  if (budget > MAX_CHUNK)
+    budget = MAX_CHUNK;
 
   return budget;
 
@@ -86,25 +88,11 @@ static void *handler_fn(void *p)
 
   if (shutdown(sock, SHUT_RD) < 0) { perror("shutdown"); goto close_it; }
 
-  /* if (fcntl(sock, F_SETFL, (long)O_NONBLOCK) < 0) { */
-  /*   perror("fcntl"); goto close_it; */
-  /* } */
-
-  while (1) {
-    uint32_t budget = get_budget();
-
-    while (budget) {
-      uint32_t chunk = (budget < sizeof(buffer)) ? budget : sizeof(buffer);
-      ssize_t written = 0;
-      if ((written = write(sock, buffer, chunk)) <= 0)
-        goto close_it;
-      //printf("Written %zu\n", written);
-      budget -= written;
-    }
-  }
+  for (off_t o = 0; sendfile(sock, devzero, &o, get_budget()) > 0; o = 0)
+    ;
 
  close_it:
-  perror("write");
+  perror("sendfile");
   close(sock);
   return NULL;
 }
@@ -118,6 +106,17 @@ int main(int argc, char **argv)
   /* Ignore SIGPIPE, otherwise we will die when the remote end closes
      a connection. */
   if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) { perror("signal"); return EXIT_FAILURE; };
+
+
+  /* Create temporary file */
+  char tmpn[] = "/tmp/benchcat.XXXXXXXX";
+  devzero = mkstemp(tmpn);
+  if (devzero < 0)      { perror("open"  ); return EXIT_FAILURE; }
+  if (unlink(tmpn) < 0) { perror("unlink"); return EXIT_FAILURE; }
+  if (lseek(devzero, MAX_CHUNK - 1, SEEK_SET) < 0)
+    { perror("seek"); return EXIT_FAILURE; }
+  if (write(devzero, "\0", 1) != 1)
+    { perror("write"); return EXIT_FAILURE; }
 
   if (argc != 3) {
     print_help();
