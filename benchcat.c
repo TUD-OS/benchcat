@@ -28,11 +28,18 @@
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <sys/sendfile.h>
 #include <netinet/in.h>
 #include <fcntl.h>
 #include <time.h>
 #include <pthread.h>
+
+#ifdef __linux__
+# include <sys/sendfile.h>
+#elif __FreeBSD__
+# include <sys/uio.h>
+#else
+# error "Your OS is not supported. Implement sendfile."
+#endif
 
 #define MAX_CHUNK (4*1024*1024)
 
