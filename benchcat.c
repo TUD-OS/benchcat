@@ -82,13 +82,26 @@ static uint32_t get_budget()
   goto again;
 }
 
+/* Always sends from file offset 0. */
+static ssize_t portable_sendfile(int fd_out, int fd_in, size_t size)
+{
+  off_t o = 0;
+#ifdef __linux__
+  return sendfile(fd_out, fd_in, &o, size);
+#elif __FreeBSD__
+  return sendfile(fd_out, fd_in, &o, size, NULL, NULL);
+#else
+# error "Your OS is not supported. Implement sendfile."
+#endif
+}
+
 static void *handler_fn(void *p)
 {
   int sock = (uintptr_t)p;
 
   if (shutdown(sock, SHUT_RD) < 0) { perror("shutdown"); goto close_it; }
 
-  for (off_t o = 0; sendfile(sock, devzero, &o, get_budget()) > 0; o = 0)
+  for (; portable_sendfile(sock, devzero, get_budget()) > 0;)
     ;
 
  close_it:
