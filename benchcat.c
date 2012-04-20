@@ -59,7 +59,7 @@ static uint32_t get_budget()
   
   uint64_t diff = ((uint64_t)now.tv_sec - (uint64_t)last_call.tv_sec) * 1000000000ULL + ((uint64_t)now.tv_nsec - (uint64_t)last_call.tv_nsec);
 
-  double budget = (double)bytes_per_second * (double)diff /* ns */ / 1000000000.0d;
+  double budget = (double)bytes_per_second * (double)diff /* ns */ / 1000000000.0l;
 
   if (budget < 1500)
     goto sleep;
