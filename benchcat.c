@@ -96,7 +96,7 @@ static ssize_t portable_sendfile(int fd_out, int fd_in, size_t size)
 #ifdef __linux__
   return sendfile(fd_out, fd_in, &o, size);
 #elif __FreeBSD__
-  return (sendfile(fd_in, fd_out, o, size, NULL, NULL, 0) == 0) ? size : -1;
+  return (sendfile(fd_in, fd_out, o, size, NULL, NULL, 0) == 0) ? (ssize_t)size : -1;
 #else
 # error "Your OS is not supported. Implement sendfile."
 #endif
