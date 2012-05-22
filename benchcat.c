@@ -21,6 +21,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 #include <inttypes.h>
@@ -46,6 +47,7 @@
 static uint64_t bytes_per_second;
 static uint16_t external_port;
 static int      devzero;
+static bool     receiving = false;
 
 static pthread_mutex_t budget_mtx;
 
@@ -106,10 +108,17 @@ static void *handler_fn(void *p)
 {
   int sock = (uintptr_t)p;
 
-  if (shutdown(sock, SHUT_RD) < 0) { perror("shutdown"); goto close_it; }
+  if (shutdown(sock, receiving ? SHUT_WR : SHUT_RD) < 0) { perror("shutdown"); goto close_it; }
 
-  for (; portable_sendfile(sock, devzero, get_budget()) > 0;)
-    ;
+  if (receiving) {
+    void *buf = malloc(MAX_CHUNK);
+    while (read(sock, buf, get_budget()) > 0)
+      ;
+    free(buf);
+  } else {
+    for (; portable_sendfile(sock, devzero, get_budget()) > 0;)
+      ;
+  }
 
  close_it:
   perror("sendfile");
