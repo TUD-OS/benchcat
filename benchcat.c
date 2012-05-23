@@ -18,7 +18,7 @@
  * General Public License version 2 for more details.
  */
 
-
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -33,6 +33,8 @@
 #include <fcntl.h>
 #include <time.h>
 #include <pthread.h>
+#include <errno.h>
+#include <sys/errno.h>
 
 #ifdef __linux__
 # include <sys/sendfile.h>
@@ -42,19 +44,19 @@
 # error "Your OS is not supported. Implement sendfile."
 #endif
 
-#define MAX_CHUNK (4*1024*1024)
+#define MAX_CHUNK (2*1024*1024)
 
 static uint64_t bytes_per_second;
 static uint16_t external_port;
 static int      devzero;
-static bool     receiving = false;
+static bool     receiving = true;
 
 static pthread_mutex_t budget_mtx;
 
 static void
 print_help(void)
 {
-  printf("Usage: limit-in-mbit port\n");
+  fprintf(stderr, "Usage: limit-in-mbit port send/recv\n");
 }
 
 static struct timespec last_call;
@@ -98,7 +100,14 @@ static ssize_t portable_sendfile(int fd_out, int fd_in, size_t size)
 #ifdef __linux__
   return sendfile(fd_out, fd_in, &o, size);
 #elif __FreeBSD__
-  return (sendfile(fd_in, fd_out, o, size, NULL, NULL, 0) == 0) ? (ssize_t)size : -1;
+  assert(size <= MAX_CHUNK);
+  ssize_t res = 0;
+  int ret = sendfile(fd_in, fd_out, o, size, NULL, &res, 0);
+  if ((ret == -1) && (errno == EINVAL)) {
+    printf("EINVAL: sendfile(%u, %u, %lu, %zu) = %d, %zd\n", fd_in, fd_out, (unsigned long)o, size, ret, res);
+    return 1;
+  } 
+  return res;
 #else
 # error "Your OS is not supported. Implement sendfile."
 #endif
@@ -106,22 +115,34 @@ static ssize_t portable_sendfile(int fd_out, int fd_in, size_t size)
 
 static void *handler_fn(void *p)
 {
+  unsigned long long bytes_sent = 0;
+  uint32_t budget = 0;
   int sock = (uintptr_t)p;
+  ssize_t cur;
 
   if (shutdown(sock, receiving ? SHUT_WR : SHUT_RD) < 0) { perror("shutdown"); goto close_it; }
 
+  int sz = 1 << 18;
+  if (setsockopt(sock, SOL_SOCKET, receiving ? SO_RCVBUF : SO_SNDBUF, &sz, sizeof(sz)) < 0)
+    goto close_it;
+
   if (receiving) {
     void *buf = malloc(MAX_CHUNK);
-    while (read(sock, buf, get_budget()) > 0)
-      ;
+
+    while ((cur = read(sock, buf, budget ? budget : (budget = get_budget()))) > 0) {
+	bytes_sent += cur;
+	assert(cur <= budget);
+	budget     -= cur;
+    }
     free(buf);
   } else {
-    for (; portable_sendfile(sock, devzero, get_budget()) > 0;)
-      ;
+    while ((cur = portable_sendfile(sock, devzero, get_budget())) > 0)
+      bytes_sent += cur;
   }
 
  close_it:
-  perror("sendfile");
+  printf("Sent %llu bytes.\n", bytes_sent);
+  perror("xmit");
   close(sock);
   return NULL;
 }
@@ -147,15 +168,20 @@ int main(int argc, char **argv)
   if (write(devzero, "\0", 1) != 1)
     { perror("write"); return EXIT_FAILURE; }
 
-  if (argc != 3) {
+  if (argc != 4) {
     print_help();
     return EXIT_FAILURE;
   }
   
   bytes_per_second = strtoull(argv[1], NULL, 0) * 1000 * 1000 / 8;
   external_port    = strtoul(argv[2], NULL, 0);
+  receiving        = (strcmp(argv[3], "recv") == 0);
+  if (!receiving && (strcmp(argv[3], "send") != 0)) {
+    fprintf(stderr, "Last parameter must be 'send' or 'recv'\n");
+    return EXIT_FAILURE;
+  }
 
-  printf("Output %" PRIu64 " MBit/s on port %u.\n", 8*bytes_per_second / (1000 * 1000), external_port);
+  printf("%s %" PRIu64 " MBit/s on port %u.\n", receiving ? "Input" : "Output", 8*bytes_per_second / (1000 * 1000), external_port);
 
   int sock = socket(AF_INET, SOCK_STREAM, 0);
   if (sock < 0) { perror("socket"); return EXIT_FAILURE; }
