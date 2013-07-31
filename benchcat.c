@@ -51,24 +51,20 @@ static uint16_t external_port;
 static int      devzero;
 static bool     receiving = true;
 
-static pthread_mutex_t budget_mtx;
-
 static void
 print_help(void)
 {
   fprintf(stderr, "Usage: limit-in-mbit port send/recv\n");
 }
 
-static struct timespec last_call;
+static __thread struct timespec last_call;
 
 static uint32_t get_budget()
 {
- again:
-  //uint64_t max_chunk = bytes_per_second / FREQUENCY;
-  pthread_mutex_lock(&budget_mtx);
-
   struct timespec now;
-  clock_gettime(CLOCK_REALTIME, &now);
+
+ again:
+  clock_gettime(CLOCK_MONOTONIC, &now);
   
   uint64_t diff = ((uint64_t)now.tv_sec - (uint64_t)last_call.tv_sec) * 1000000000ULL + ((uint64_t)now.tv_nsec - (uint64_t)last_call.tv_nsec);
 
@@ -77,10 +73,7 @@ static uint32_t get_budget()
   if (budget < 1500)
     goto sleep;
 
-  /* printf("%llu ns -> %lf bytes budget (%llu bps)\n", diff, budget, bytes_per_second); */
   last_call = now;
-
-  pthread_mutex_unlock(&budget_mtx);
 
   if (budget > MAX_CHUNK)
     budget = MAX_CHUNK;
@@ -88,7 +81,6 @@ static uint32_t get_budget()
   return budget;
 
  sleep:
-  pthread_mutex_unlock(&budget_mtx);
   usleep(1000);
   goto again;
 }
@@ -149,10 +141,6 @@ static void *handler_fn(void *p)
 
 int main(int argc, char **argv)
 {
-  if (pthread_mutex_init(&budget_mtx, NULL) < 0) {
-    perror("pthread_mutex_init"); return EXIT_FAILURE;
-  }
-
   /* Ignore SIGPIPE, otherwise we will die when the remote end closes
      a connection. */
   if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) { perror("signal"); return EXIT_FAILURE; };
