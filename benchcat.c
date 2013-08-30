@@ -60,6 +60,7 @@ print_help(void)
   fprintf(stderr, "Usage: ip port limit-in-mbit active/passive send/recv\n");
 }
 
+static unsigned connected_clients;
 static __thread struct timespec last_call;
 
 static uint32_t get_budget()
@@ -76,6 +77,9 @@ static uint32_t get_budget()
   uint64_t diff = ((uint64_t)now.tv_sec - (uint64_t)last_call.tv_sec) * 1000000000ULL + ((uint64_t)now.tv_nsec - (uint64_t)last_call.tv_nsec);
 
   double budget = (double)bytes_per_second * (double)diff /* ns */ / 1000000000.0l;
+
+  /* We evenly divide our budget per client. */
+  budget = budget / connected_clients;
 
   if (budget < 1500)
     goto sleep;
@@ -119,6 +123,8 @@ static void *handler_fn(void *p)
   int sock = (uintptr_t)p;
   ssize_t cur;
 
+  __atomic_add_fetch(&connected_clients, 1, __ATOMIC_SEQ_CST);
+
   if (shutdown(sock, receiving ? SHUT_WR : SHUT_RD) < 0) { perror("shutdown"); goto close_it; }
 
   int sz = 1 << 18;
@@ -147,6 +153,8 @@ static void *handler_fn(void *p)
   clock_gettime(CLOCK_MONOTONIC_RAW, &end);
 
  close_it:
+  __atomic_sub_fetch(&connected_clients, 1, __ATOMIC_SEQ_CST);
+
   printf("%llu bytes in total.\n", bytes_sent);
   perror("xmit");
   close(sock);
